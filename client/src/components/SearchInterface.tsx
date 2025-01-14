@@ -2,7 +2,7 @@ import { useState } from "react"
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import { Loader2 } from "lucide-react"
+import { Loader2, Download } from "lucide-react"
 
 type SearchResult = {
   name: string
@@ -16,30 +16,78 @@ export function SearchInterface() {
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState(null)
 
-  const handleSearch = async (e: React.FormEvent<HTMLFormElement>) => {
+  function handleExportCSV() {
+    // Préparer les données CSV
+    const csvHeader = ["Nom", "Email", "Téléphone", "Site web"].join(",")
+    const csvRows = results.map((result: SearchResult) => {
+      return [
+        `"${result.name || ""}"`,
+        `"${result.email || ""}"`,
+        `"${result.phone || ""}"`,
+        `"${result.website || ""}"`,
+      ].join(",")
+    })
+    const csvString = [csvHeader, ...csvRows].join("\n")
+
+    // Créer le blob et le lien de téléchargement
+    const blob = new Blob([csvString], { type: "text/csv;charset=utf-8;" })
+    const link = document.createElement("a")
+    const url = URL.createObjectURL(blob)
+
+    // Configurer et déclencher le téléchargement
+    link.setAttribute("href", url)
+    link.setAttribute(
+      "download",
+      `resultats_${query.replace(/\s+/g, "_")}_${
+        new Date().toISOString().split("T")[0]
+      }.csv`
+    )
+    link.style.visibility = "hidden"
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+  }
+
+  const handleSearch = async (e: React.FormEvent) => {
     e.preventDefault()
     setIsLoading(true)
     setError(null)
+    setResults([]) // Reset results
 
-    try {
-      const response = await fetch("/api/scrape", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ query }),
-      })
+    const evtSource = new EventSource(
+      // `${import.meta.env.VITE_API_URL}/scrape-stream?query=${encodeURIComponent(
+      //   query
+      // )}`
+      `http://localhost:5001/api/scrape-stream?query=${encodeURIComponent(
+        query
+      )}`
+    )
 
-      if (!response.ok) {
-        throw new Error("Erreur lors de la recherche")
+    evtSource.onmessage = (event) => {
+      const data = JSON.parse(event.data)
+
+      if (data.error) {
+        setError(data.error)
+        evtSource.close()
+        setIsLoading(false)
+        return
       }
 
-      const data = await response.json()
-      setResults(data)
-    } catch (err) {
-      //@ts-expect-error "type unknown"
-      setError(err.message)
-    } finally {
+      if (data.results) {
+        // @ts-expect-error "results" is always an array
+        setResults((prev) => [...prev, ...data.results])
+      }
+
+      if (data.status === "completed") {
+        evtSource.close()
+        setIsLoading(false)
+      }
+    }
+
+    evtSource.onerror = () => {
+      // @ts-expect-error "results" is always an array
+      setError("Erreur de connexion au serveur")
+      evtSource.close()
       setIsLoading(false)
     }
   }
@@ -70,6 +118,22 @@ export function SearchInterface() {
                   "Rechercher"
                 )}
               </Button>
+              {results.length > 0 && !isLoading && (
+                <Button
+                  type='button'
+                  onClick={handleExportCSV}
+                  className='bg-green-600 hover:bg-green-700'
+                >
+                  <Download className='mr-2 h-4 w-4' />
+                  CSV
+                </Button>
+              )}
+              <Button
+                className={`bg-purple-600 ${isLoading ? "flex" : "hidden"}`}
+                onClick={() => {}}
+              >
+                Stopper la recherche
+              </Button>
             </div>
           </form>
 
@@ -79,32 +143,40 @@ export function SearchInterface() {
             </div>
           )}
 
-          {results.length > 0 && (
-            <div className='mt-6 space-y-4'>
-              <h2 className='text-xl font-semibold'>Résultats</h2>
-              <div className='grid gap-4'>
-                {results.map((result: SearchResult, index) => (
-                  <Card key={index} className='p-4'>
-                    <h3 className='font-medium'>{result.name}</h3>
-                    {result.phone && <p>Téléphone: {result.phone}</p>}
-                    {result.email && <p>Email: {result.email}</p>}
-                    {result.website && (
-                      <p>
-                        <a
-                          href={result.website}
-                          target='_blank'
-                          rel='noopener noreferrer'
-                          className='text-blue-600 hover:underline'
-                        >
-                          Site web
-                        </a>
-                      </p>
-                    )}
-                  </Card>
-                ))}
+          <div className='mt-6 space-y-4'>
+            {isLoading && (
+              <div className='text-center text-gray-500'>
+                Recherche en cours... {results.length} résultats trouvés
               </div>
+            )}
+
+            <div className='grid gap-4'>
+              {results.length > 0 && (
+                <div className='text-center text-gray-500'>
+                  {results.length} résultats trouvés
+                </div>
+              )}
+              {results.map((result: SearchResult, index) => (
+                <Card key={index} className='p-4'>
+                  <h3 className='font-medium'>{result.name}</h3>
+                  {result.phone && <p>Téléphone: {result.phone}</p>}
+                  {result.email && <p>Email: {result.email}</p>}
+                  {result.website && (
+                    <p>
+                      <a
+                        href={result.website}
+                        target='_blank'
+                        rel='noopener noreferrer'
+                        className='text-blue-600 hover:underline'
+                      >
+                        Site web
+                      </a>
+                    </p>
+                  )}
+                </Card>
+              ))}
             </div>
-          )}
+          </div>
         </CardContent>
       </Card>
     </div>
